@@ -5,6 +5,15 @@ import pytest
 from planet_config import load_config, ConfigError, resolve_resource
 
 
+def test_root_example_is_independent_of_working_directory(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.chdir(tmp_path)
+    config = load_config(root / "configs/entry/entry_example.yaml", overrides=["service.rate_hz=100"])
+    assert config.data["service"]["rate_hz"] == 100
+    assert all(Path(source).is_relative_to(root / "configs") for source in config.origins.values())
+    assert not list((root / "src").rglob("*.yaml"))
+
+
 def test_declaration_origin_survives_composition_and_cwd(tmp_path, monkeypatch):
     base = tmp_path / "base"
     base.mkdir()
@@ -44,7 +53,7 @@ def test_invalid_composition(tmp_path, body):
         load_config(p)
 
 
-def test_artifact_checksum_and_package_resource(tmp_path):
+def test_artifact_checksum_and_package_resource(tmp_path, monkeypatch):
     p = tmp_path / "weights"
     p.write_bytes(b"one")
     lock = {"policy": {"path": str(p), "sha256": hashlib.sha256(b"one").hexdigest()}}
@@ -52,7 +61,12 @@ def test_artifact_checksum_and_package_resource(tmp_path):
     p.write_bytes(b"two")
     with pytest.raises(ConfigError):
         resolve_resource("artifact://policy", artifacts=lock)
-    assert resolve_resource("pkg://planet_config/data/example.yaml").is_file()
+    fixture = tmp_path / "resource_fixture"
+    fixture.mkdir()
+    (fixture / "__init__.py").write_text("")
+    (fixture / "example.yaml").write_text("service: {rate_hz: 50}\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    assert resolve_resource("pkg://resource_fixture/example.yaml") == fixture / "example.yaml"
     with pytest.raises(ConfigError):
         resolve_resource("pkg://planet_config/../private")
 

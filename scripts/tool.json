@@ -2,8 +2,7 @@
   "doctor": [
     "-m",
     "planet_config",
-    "validate",
-    "pkg://planet_config/data/example.yaml"
+    "validate"
   ],
   "run": [
     "-m",
