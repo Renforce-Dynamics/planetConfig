@@ -1,59 +1,55 @@
 # planetConfig
 
-**Shared configuration and communication contracts for robot applications.**
+共享配置与通信协议，供 Planet 服务和执行器独立使用。
 
-This repository publishes two independent Python packages. Services select the package they need; source composition pins this repository without bringing in a robot executor, model or hardware SDK.
+## 安装与使用
 
-| Package | Import | Contents | Runtime dependencies |
-| --- | --- | --- | --- |
-| `planet-config` | `planet_config` | YAML layers, resource paths, strict overrides, provenance and snapshots | PyYAML |
-| `planet-protocol` | `planet_protocol` | Operator input, state discovery, joint targets and localization codecs/clients | Python standard library |
-
-## Quick start
-
-Requires Python 3.10+ and `uv`.
+需要 Python 3.10+、`uv`。
 
 ```bash
 git clone git@github.com:Renforce-Dynamics/planetConfig.git
 cd planetConfig
 ./scripts/bootstrap.sh
-./scripts/doctor.sh
-./scripts/run.sh resolve pkg://planet_config/data/example.yaml --set service.rate_hz=100 --output runs/example
-./scripts/test.sh
-./scripts/build.sh
+
+# 展开配置、覆盖参数，并保存本次配置快照
+./scripts/run.sh -- resolve pkg://planet_config/data/example.yaml \
+  --set service.rate_hz=100 --output runs/example
 ```
 
-`--venv /path/to/env` selects an environment. Tool defaults can also be set with `PLANET_VENV`, `PLANET_PYTHON` and `PLANET_WHEELHOUSE`. `bootstrap.sh` installs the two local packages; `setup.sh --wheelhouse PATH` provides the wheel-based workflow used by the other Planet repositories.
+处理自己的配置：
 
-## Configuration
-
-```yaml
-extends: ./defaults.yaml
-compose:
-  site: ./site.yaml
-service:
-  rate_hz: 50
+```bash
+.venv/bin/planet-config resolve ./site.yaml --output runs/site
+.venv/bin/planet-config diff ./site.yaml ./other-site.yaml
 ```
 
-Composition applies `extends` in order, then `robot`, `backend`, `task`, `site`, `experiment`, the current file and CLI overrides. Mappings merge recursively; lists and scalars replace. Duplicate keys, inheritance cycles, missing resources and unknown override fields raise configuration errors. Each service validates its own domain schema after composition.
+## 在项目中使用
+
+| 包 | 导入名 | 内容 |
+| --- | --- | --- |
+| `planet-config` | `planet_config` | YAML 继承、资源定位、参数覆盖和快照 |
+| `planet-protocol` | `planet_protocol` | PLNJ、状态查询、关节目标和定位协议 |
 
 ```python
 from planet_config import load_config
 
-config = load_config("site.yaml", overrides=["service.rate_hz=100"])
+config = load_config("pkg://planet_config/data/example.yaml",
+                     overrides=["service.rate_hz=100"])
 config.freeze("runs/site")
 ```
 
-`ResolvedConfig.path()` resolves a resource relative to the file that declared it, including through inheritance. `pkg://` references installed package resources; `artifact://` references explicit files with SHA256 checks. Snapshots include the effective YAML, declaration provenance, overrides and digest.
+配置支持有序 `extends` 和 `compose`；字典逐项合并，列表替换。
+`pkg://` 读取安装包资源；快照保存生效配置、来源、覆盖参数和摘要。
+业务字段由各服务校验，配置库只依赖 PyYAML，协议包只依赖标准库。
 
-## Protocols and consumers
+## 文档与开发
 
-The [protocol package](packages/planet-protocol/README.md) defines `planet.operator.v1`, `planet.joint-target.v1` and `planet.localization.v1`, as well as the PLNJ binary format. The receiver owns execution and state transitions; clients submit input or perform read-only discovery.
+- [协议、客户端与数据格式](packages/planet-protocol/README.md)
+- [配置 API](src/planet_config/__init__.py)
 
-PlanetJoystick uses configuration and protocol clients. PlanetRecord and PlanetRelay use configuration. planet-rally composes those services. Cadence consumes these packages and implements the execution-side adapters; it retains its old package names and wire schemas as compatibility adapters. Planet packages never import those adapters.
+开发：`./scripts/test.sh` 运行测试，`./scripts/build.sh` 构建安装包。
 
-## Development and ownership
+本仓库无 submodule，不依赖 Cadence、模型或 SDK；消费者按需安装共享包。
+工具支持 `--venv /path/to/env`；默认环境为 `.venv`。
 
-`source-workspace.json` lists the two packages in this repository. There are no submodules. Source and wheel installations are checked independently, including a standard-library-only protocol test.
-
-Maintained by **Renforce Dynamics** under the MIT license.
+由 **Renforce Dynamics** 开发维护，采用 [MIT License](LICENSE)。
