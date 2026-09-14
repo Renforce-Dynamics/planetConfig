@@ -1,0 +1,3 @@
+service:
+  name: example
+  rate_hz: 50

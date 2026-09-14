@@ -1,0 +1,12 @@
+{
+  "doctor": [
+    "-m",
+    "planet_config",
+    "validate",
+    "pkg://planet_config/data/example.yaml"
+  ],
+  "run": [
+    "-m",
+    "planet_config"
+  ]
+}
