@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 from collections.abc import Mapping
+import errno
 import json
 import math
 from numbers import Integral, Real
@@ -104,7 +105,7 @@ class _UdpClient:
 
     receiver_label = "Protocol receiver"
 
-    def __init__(self, host, port, timeout_s=1.0, *, loopback=False):
+    def __init__(self, host, port, timeout_s=1.0, *, unicast=False):
         _name(host, "host")
         port = _integer(port, "port", 1, 65535)
         if isinstance(timeout_s, bool) or not isinstance(timeout_s, Real):
@@ -112,22 +113,31 @@ class _UdpClient:
         timeout_s = float(timeout_s)
         if not math.isfinite(timeout_s) or timeout_s <= 0:
             raise ValueError("timeout_s must be positive and finite")
-        if loopback:
-            try:
-                address = ipaddress.ip_address(host)
-            except ValueError as exc:
-                raise ValueError("joint-target host must be a loopback IP address") from exc
-            if not address.is_loopback:
-                raise ValueError("joint-target host must be a loopback IP address")
-            family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
-            endpoint = (str(address), port)
-        else:
-            candidates = socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
-            family, _, _, _, endpoint = candidates[0]
+        candidates = socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
+        family, _, _, _, endpoint = candidates[0]
+        if unicast:
+            address = ipaddress.ip_address(endpoint[0])
+            address = getattr(address, "ipv4_mapped", None) or address
+            if address.is_multicast or address.is_unspecified or str(address) == "255.255.255.255":
+                raise ValueError("joint-target host must resolve to a unicast address")
         self._socket = socket.socket(family, socket.SOCK_DGRAM)
         try:
             self._socket.settimeout(timeout_s)
             self._socket.connect(endpoint)
+            if self._socket.getsockname() == self._socket.getpeername():
+                # An unbound UDP connect can choose the absent peer's port and
+                # loop requests back to this client. Reserve that local endpoint
+                # until a replacement has explicitly acquired a different port.
+                previous = self._socket
+                try:
+                    self._socket = socket.socket(family, socket.SOCK_DGRAM)
+                    self._socket.settimeout(timeout_s)
+                    self._socket.bind(("::" if family == socket.AF_INET6 else "0.0.0.0", 0))
+                    self._socket.connect(endpoint)
+                    if self._socket.getsockname() == self._socket.getpeername():
+                        raise OSError(errno.EADDRINUSE, "UDP client source endpoint equals its peer")
+                finally:
+                    previous.close()
         except BaseException:
             self._socket.close()
             raise
@@ -235,7 +245,7 @@ class OperatorClient(_UdpClient):
 
 
 class JointTargetClient(_UdpClient):
-    """Send explicit joint angles to a local, activation-scoped target mailbox.
+    """Send explicit joint angles to an activation-scoped target mailbox.
 
     The client never chooses a new activation, increments sequences, sends a
     fallback, or retries a frame automatically. Those decisions belong to the
@@ -245,7 +255,7 @@ class JointTargetClient(_UdpClient):
     schema = JOINT_TARGET_SCHEMA
 
     def __init__(self, host, port, timeout_s=1.0):
-        super().__init__(host, port, timeout_s, loopback=True)
+        super().__init__(host, port, timeout_s, unicast=True)
 
     def status(self):
         response = self._exchange(
@@ -255,7 +265,34 @@ class JointTargetClient(_UdpClient):
             raise ValueError("status.activation is missing")
         if response["activation"] is not None:
             _integer(response["activation"], "activation", 1)
-        _integer(response.get("dimension"), "dimension", 1)
+        dimension = _integer(response.get("dimension"), "dimension", 1)
+        names = response.get("joint_names")
+        if names is not None:
+            if not isinstance(names, list) or len(names) != dimension:
+                raise ValueError("status.joint_names must be a list matching dimension or null")
+            for name in names:
+                _name(name, "status.joint_names entry")
+            if len(set(names)) != dimension:
+                raise ValueError("status.joint_names must be unique")
+        positions = response.get("q_des")
+        if positions is not None:
+            try:
+                valid_positions = (isinstance(positions, list) and len(positions) == dimension
+                                   and all(not isinstance(value, bool) and isinstance(value, Real)
+                                           and math.isfinite(value) for value in positions))
+            except OverflowError:
+                valid_positions = False
+            if not valid_positions:
+                raise ValueError("status.q_des must be a finite angle list matching dimension or null")
+        sequence = response.get("sequence")
+        if sequence is not None:
+            _integer(sequence, "status.sequence", 0)
+        if response["activation"] is None and (positions is not None or sequence is not None):
+            raise ValueError("inactive status cannot contain q_des or sequence")
+        if response.get("state_id") is not None:
+            _integer(response["state_id"], "status.state_id", 0, 65535)
+        if response.get("state_key") is not None:
+            _name(response["state_key"], "status.state_key")
         return response
 
     def send(self, activation, sequence, q_des):

@@ -41,14 +41,28 @@ with JointTargetClient("127.0.0.1", 15100) as targets:
     if activation is not None:
         # Supply positions suitable for the configured joint order and limits.
         positions_rad = [0.0] * status["dimension"]
-        receipt = targets.send(activation, sequence=0, q_des=positions_rad)
+        sequence = 0 if status.get("sequence") is None else status["sequence"] + 1
+        receipt = targets.send(activation, sequence=sequence, q_des=positions_rad)
 ```
 
-Schema `planet.joint-target.v1` carries joint angles in radians, an activation token and an increasing sequence. The application chooses the joint order, dimension, limits and initial posture. The client currently requires a loopback IP address.
+Schema `planet.joint-target.v1` carries joint angles in radians, an activation token and an increasing sequence. The application chooses the joint order, dimension, limits and initial posture. The client accepts an explicit IPv4/IPv6 unicast address or hostname; receivers choose their own bind address. Local examples retain `127.0.0.1`.
 
 Acquire an activation when the consuming state is entered, then increase sequence numbers for each new frame. When that state is re-entered, acquire its new activation. The receiver retains the latest accepted target during delays or disconnects; a client never sends a reset posture on close. A receipt with `accepted: true` acknowledges reception into a mailbox, not backend submission or physical motion. An inactive state reports `activation: null`.
 
 The client validates the returned activation and sequence. It does not choose an activation, advance sequence numbers, retry a target, or enter a motion state automatically.
+
+Status responses may additionally contain:
+
+| Field | Meaning |
+| --- | --- |
+| `state_id`, `state_key` | Application-owned endpoint identity, including while inactive; unsigned 16-bit ID / nonempty string, or `null`. |
+| `joint_names` | Unique names in target order, matching `dimension`, or `null`. |
+| `sequence` | Latest received sequence in this activation, or `null` before any target arrives. |
+| `q_des` | Last committed joint-position command in this activation, or `null` before the first commit. |
+
+The receiver captures activation, sequence and command together. A newer received sequence may coexist with an earlier committed command; status is not a receipt-to-execution acknowledgement or a physical joint measurement. Applications distinguish backend execution from shadow evaluation in their runtime status. Inactive status clears `sequence` and `q_des`; entering again starts a fresh activation. Known endpoint identity and joint names can remain available while inactive.
+
+Before continuing playback, verify endpoint identity and joint order, then continue above the reported sequence within the same activation. Old servers may omit all additional fields; clients preserve and validate optional fields when present.
 
 ## Localization
 

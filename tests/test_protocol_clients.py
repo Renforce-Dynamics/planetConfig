@@ -207,9 +207,38 @@ def test_invalid_target_values_fail_without_sending(target):
         assert not requests
 
 
-def test_upper_target_client_remains_loopback_only():
-    with pytest.raises(ValueError, match="loopback"):
-        JointTargetClient("192.0.2.1", 15100)
+@pytest.mark.parametrize("host,family,address", [
+    ("192.0.2.1", socket.AF_INET, "192.0.2.1"),
+    ("2001:db8::1", socket.AF_INET6, "2001:db8::1"),
+    ("robot.example", socket.AF_INET, "192.0.2.8"),
+])
+def test_upper_target_client_accepts_explicit_remote_addresses_without_sending(monkeypatch, host, family, address):
+    calls = []
+
+    class Socket:
+        def __init__(self, selected_family, kind):
+            assert selected_family == family and kind == socket.SOCK_DGRAM
+
+        def settimeout(self, value):
+            pass
+
+        def connect(self, endpoint):
+            self.endpoint = endpoint
+            calls.append(endpoint)
+
+        def getsockname(self):
+            return (address, 15101)
+
+        def getpeername(self):
+            return self.endpoint
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [(family, socket.SOCK_DGRAM, 0, "", (address, 15100))])
+    monkeypatch.setattr(socket, "socket", Socket)
+    with JointTargetClient(host, 15100):
+        assert calls == [(address, 15100)]
 
 
 @pytest.mark.parametrize("client_type", [OperatorClient, JointTargetClient])
